@@ -1,0 +1,185 @@
+---
+title: "Learning Seattle's Work Habits from Bicycle Counts (with R!)"
+author: "José María Mateos - http://rinzewind.org/blog-en"
+date: "2015-08-09"
+output: html_document
+---
+
+This is an R version of [Learning Seattle's Work Habits from Bicycle Counts](https://jakevdp.github.io/blog/2015/07/23/learning-seattles-work-habits-from-bicycle-counts/). It more or less mimics the original Python code to offer an equivalent output. If all goes well, you might just run this .Rmd file and a nice HTML output will be generated.
+
+Let's start by importing all the necessary libraries.
+
+```{r libload}
+library(RCurl)
+library(ggplot2)
+theme_set(theme_bw(12))
+library(dplyr)
+library(tidyr)
+library(mclust)
+# Output should not be in Spanish
+Sys.setlocale(category = "LC_ALL", locale = "C")
+# knitr options
+library(knitr)
+opts_chunk$set(fig.width = 10, fig.height = 7)
+```
+
+I'm loading the data directly using `RCurl`, without saving it to a temporary file. To avoid requesting it repeatedly (I had to run this code several times until everything was right, you know), I am doing two things:
+
+1. Do not reload the `dataset` variable if it already exists.
+2. Tell R Markdown to cache this code block.
+
+```{r loaddata, cache = TRUE}
+if (!exists("dataset")) {
+    dataset <- getURI("https://data.seattle.gov/api/views/65db-xm6k/rows.csv?accessType=DOWNLOAD")
+}
+
+# Now, dataset is the raw .csv file. We need to create a data.frame with this
+bikes <- read.csv(textConnection(dataset))
+
+# How are we doing?
+summary(bikes)
+
+# The date is not properly recognized. We can change that.
+bikes$Date <- as.POSIXct(bikes$Date,
+                         format = "%m/%d/%Y %r")
+
+# Let's see now
+summary(bikes) # OK!
+
+# Data cleaning: names, NA values and Total column
+names(bikes) <- c("Date", "West", "East")
+bikes[is.na(bikes)] <- 0
+bikes$Total <- with(bikes, West + East)
+```
+
+Ok, we have the data.frame ready. Let's try the first plot:
+
+```{r pltweekly}
+# We have to melt our data.frame to feed it to ggplot2
+btot <- bikes %>%
+  gather(variable, value, -Date) %>%                    # b1 melt
+  mutate(week = format(Date, format = "%Y-%U")) %>%     # b1 weekly total
+  group_by(week, variable) %>%
+  summarise(value = sum(value), Date = min(Date))       # btot
+
+# Plotting function
+pltweekly <- ggplot(btot) + 
+             geom_line(aes(x = Date, y = value, color = variable)) +
+             ylab("Weekly trips")
+pltweekly
+```
+
+So far, so good. It looks much simpler in Python. Perhaps there is some easier way of doing this in R with `plyr` or maybe `cast` and / or `melt` (just guessing), but this was just five lines of quite explicit code.
+
+Now, let's create the `X` matrix.
+
+```{r X}
+# Need hour of the day and date without time.
+bikes$hour <- strftime(bikes$Date, "%H")
+bikes$Date2 <- as.Date(bikes$Date) # Do not destroy previous colum.n
+
+X1 <- bikes %>%                                         # dcast
+  group_by(Date2, hour) %>%
+  summarise(value = sum(East)) %>%
+  spread(hour, value, fill = 0)
+X2 <- bikes %>%                                         # dcast
+  group_by(Date2, hour) %>%
+  summarise(value = sum(West)) %>%
+  spread(hour, value, fill = 0)
+
+X <- cbind(X1, X2[, -1])
+dim(X)
+```
+
+For some reason, our dataset has 1033 days, while the original one had 1001. This is funny, but doesn't seem to affect the results. Perhaps the CSV file I am downloading has been updated contains with respect of the one used in the original post.
+
+Time for the PCA now. The original article used two components, which contained 90 % of the variance of `X`. Let's see if we have the same result.
+
+```{r pca}
+pca1 <- prcomp(X[, -1])
+cumvar <- cumsum(pca1$sdev^2 / sum(pca1$sdev^2))
+cumvar[1:5]
+
+# The two first components have 0.8994963 of the variance. Ok, let's take those two.
+Xpca <- pca1$x[, 1:2]
+
+# Let's plot it
+Xpca <- as.data.frame(Xpca)
+names(Xpca) <- c("PC1", "PC2")
+Xpca$total_trips <- rowSums(X[, -1])
+Xpca$Date2 <- X$Date2
+
+pltpca <- ggplot(Xpca) + 
+          geom_point(aes(x = PC1, y = PC2, color = total_trips), 
+                     size = 4, alpha = 0.7) +
+          scale_colour_gradientn(colours = rev(rainbow(3)))
+pltpca
+```
+
+Does not look bad. The x axis is inverted with respect to the original and can be easily fixed by switching the sign for `PC1`, but this is only an aesthetic detail. The data is describing exactly the same pattern.
+
+The original post now used Gaussian Mixture Models to identify these two clouds. Instead, given that R already provides a very handy `kmeans` function, I am going to try that. This is a brief detour from the original route, but I promise it will be a short one. Let's see:
+
+```{r kmeans}
+Xpca$clusters <- kmeans(Xpca[, c("PC1", "PC2")], 
+                   centers = 2, iter.max = 100, nstart = 10)$cluster
+# Did it work?
+pltkmeans <- ggplot(Xpca) +
+             geom_point(aes(x = PC1, y = PC2, color = factor(clusters))) +
+             scale_color_manual(values = c("red", "blue"))
+pltkmeans
+```
+
+The result is really bad. Let's use a proper GMM function (`Mclust()` from the `mclust` library):
+
+```{r gmm}
+Xpca$clusters <- Mclust(Xpca[, c("PC1", "PC2")], G = 2)$classification
+pltkmeans <- ggplot(Xpca) +
+             geom_point(aes(x = PC1, y = PC2, color = factor(clusters))) +
+             scale_color_manual(values = c("red", "blue"))
+pltkmeans
+```
+
+This is much better. Now let's join the cluster classification on the original dataset and compute the average trends by hour.
+
+```{r averagehourly}
+by_hour <- bikes %>%
+  left_join(Xpca[, c("clusters", "Date2")]) %>%         # merge
+  group_by(hour, clusters) %>%
+  summarise_each(funs(mean), -Date, -Date2) %>%         # aggregate
+  gather(variable, value, -hour, -clusters)             # melt
+
+by_hour$hour <- as.numeric(by_hour$hour)
+pltavg <- ggplot(by_hour) +
+          geom_line(aes(x = hour, y = value, group = variable, color = variable)) +
+          facet_wrap(~ clusters) +
+          xlab("Hour") + ylab("Average trips per hour\n")
+pltavg
+```
+
+Good! We are seeing exactly the same behaviors as in the original post. The scales are the same for both plots, but this can be changed by using `facet_wrap(~ clusters, scales = "free")` instead of the actual function call.
+
+So, let's go on with the different weekdays behavior.
+
+```{r weekdays}
+# This uses the PCA'd data, so let's add a weekday column to that one
+Xpca$weekday <- weekdays(Xpca$Date2)
+Xpca$isweekend <- with(Xpca, weekday %in% c("Saturday", "Sunday"))
+pltpca <- ggplot(Xpca) + 
+          geom_point(aes(x = PC1, y = PC2, color = weekday), 
+                     size = 4, alpha = 0.7) +
+          scale_color_manual(values = rainbow(7))
+pltpca
+nrow(Xpca[Xpca$isweekend & Xpca$clusters == 2, ]) # 0, as expected
+nrow(Xpca[!Xpca$isweekend & Xpca$clusters == 1, ]) # 25, original was 23, but here are more rows in this dataset
+```
+
+The plot looks fine. The three *offending Fridays* are there too:
+
+```{r fridays}
+Xpca[Xpca$weekday == "Friday" & Xpca$PC1 < -600, ]$Date2
+```
+
+[Gotcha!](http://www.cascade.org/f5-bike-work-day)
+
+I am stopping here. I could not find an easy way of obtaining US Federal holidays from any R function. I found the function `holidayNYSE()` in the `timeDate` library, but I understand [holiday days in Seattle are not the same as holiday days in New York](https://en.wikipedia.org/wiki/Public_holidays_in_the_United_States). I could try to get those from another source, but I could not find any other library to provide this; I could also generate the list by hand (using the NY list as a starting point) or scrape them from some webpage, but I feel that defeats the purpose of this exercise (just a bit.) Anyways, I am skipping the holiday days part from the original analysis.
