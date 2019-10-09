@@ -12,8 +12,7 @@ output:
 
 ```{r setup, include=FALSE}
 Sys.setlocale(locale='en_US.UTF-8')
-library(knitr)
-opts_chunk$set(fig.height=4, fig.width=8)
+knitr::opts_chunk$set(fig.height=4, fig.width=8)
 ```
 
 # Introduction
@@ -51,161 +50,84 @@ Similarities and differences<br>in a day-to-day analysis with Python and R
 
 ## Data Reading
 
-```{python eval=F}
+```{python}
 import pandas as pd
 bikes = pd.read_csv('FremontBridge-14-02-2016.csv', 
-                   index_col='Date', parse_dates=True)
+                    index_col='Date', parse_dates=True)
 bikes.head()
 ```
 
-```
-                     Fremont Bridge West Sidewalk  \
-Date                                                
-2012-10-03 00:00:00                             4   
-2012-10-03 01:00:00                             4   
-2012-10-03 02:00:00                             1   
-2012-10-03 03:00:00                             2   
-2012-10-03 04:00:00                             6   
-
-                     Fremont Bridge East Sidewalk  
-Date                                               
-2012-10-03 00:00:00                             9  
-2012-10-03 01:00:00                             6  
-2012-10-03 02:00:00                             1  
-2012-10-03 03:00:00                             3  
-2012-10-03 04:00:00                             1
-```
 ## Data Cleaning
 
-```{python eval=F}
+```{python}
 bikes.columns = ['West', 'East']
 bikes.fillna(0, inplace=True)
 bikes['Total'] = bikes.eval('East + West')
 bikes.head()
 ```
 
-```
-                     West  East  Total
-Date                                  
-2012-10-03 00:00:00     4     9     13
-2012-10-03 01:00:00     4     6     10
-2012-10-03 02:00:00     1     1      2
-2012-10-03 03:00:00     2     3      5
-2012-10-03 04:00:00     6     1      7
-```
-
 ## First Glance (1)
 
-```{python eval=F}
-weekly = bikes.resample('W', how='sum')
+```{python}
+weekly = bikes.resample('W').sum()
 weekly.head()
-```
-
-```
-            West  East  Total
-Date                         
-2012-10-07  7297  6995  14292
-2012-10-14  8679  8116  16795
-2012-10-21  7946  7563  15509
-2012-10-28  6901  6536  13437
-2012-11-04  6408  5786  12194
 ```
 
 ## First Glance (2)
 
-```{python eval=F}
+```{python}
 import matplotlib.pyplot as plt
 import seaborn; seaborn.set()  # plot styling
 weekly.plot()
 plt.ylabel('weekly trips')
 ```
 
-![first-glance](img/first-glance.png)
-
 ## Data Transforming
 
-```{python eval=F}
-X = bikes.pivot_table(['East', 'West'],
-                          index=bikes.index.date,
-                          columns=bikes.index.hour,
-                          fill_values=0)
+```{python}
+X = bikes.pivot_table(['East', 'West'], index=bikes.index.date,
+                      columns=bikes.index.hour, fill_value=0)
 X.head()
-```
-
-```
-           East                                    ... West                 \
-             0  1  2  3  4   5   6    7    8    9  ...   14   15   16   17   
-2012-10-03    9  6  1  3  1  10  50   95  146  104 ...   77   72  133  192   
-2012-10-04   11  0  6  3  1  11  51   89  134   94 ...   63   73  114  154   
-2012-10-05    7  4  3  2  2   7  37  101  119   81 ...   63   80  120  144   
-2012-10-06    7  5  2  2  1   2  15   16   47   55 ...   89  115  107  107   
-2012-10-07    5  5  1  2  2   3   8   12   26   36 ...  126  122  132  118   
-
-                                     
-             18  19  20  21  22  23  
-2012-10-03  122  59  29  25  24   5  
-2012-10-04  137  57  27  31  25  11  
-2012-10-05  107  42  27  11  10  16  
-2012-10-06   41  40  25  18  14  15  
-2012-10-07   68  26  19  12   9   5
 ```
 
 ## PCA Analysis (1)
 
-```{python eval=F}
+```{python}
 from sklearn.decomposition import PCA
 Xpca = PCA(0.9).fit_transform(X.values)
 Xpca.shape
 ```
 
-```{python eval=F}
-(1216, 3)
-```
-
 ## PCA Analysis (2)
 
-```{python eval=F}
+```{python}
 total_trips = X.values.sum(1)
 plt.scatter(Xpca[:, 0], Xpca[:, 1], c=total_trips, cmap='cubehelix')
-plt.colorbar(label='total trips');
+plt.colorbar(label='total trips'); plt.show()
 ```
-
-![pca-analysis](img/pca-analysis.png)
 
 ## Clustering
 
-```{python eval=F}
-from sklearn.mixture import GMM
-gmm = GMM(3, covariance_type='full', random_state=0)
+```{python, message=FALSE, warning=FALSE}
+from sklearn.mixture import GaussianMixture
+gmm = GaussianMixture(3, covariance_type='full', random_state=0)
 gmm.fit(Xpca)
 cluster_label = gmm.predict(Xpca)
 plt.scatter(Xpca[:, 0], Xpca[:, 1], c=cluster_label)
 ```
 
-![clustering](img/clustering.png)
-
 ## Average Trend (1)
 
-```{python eval=F}
+```{python}
 X['Cluster'] = cluster_label
 bikes = bikes.join(X['Cluster'], on=bikes.index.date)
 by_hour = bikes.groupby(['Cluster', bikes.index.time]).mean()
 by_hour.head()
 ```
 
-```
-                      West      East      Total
-Cluster
-0       00:00:00  7.480211  9.889182  17.369393
-        01:00:00  4.934037  5.601583  10.535620
-        02:00:00  3.574468  3.678191   7.252660
-        03:00:00  2.387435  1.764398   4.151832
-        04:00:00  2.013193  2.110818   4.124011
-```
-
 ## Average Trend (2)
 
-```{python eval=F}
+```{python}
 import numpy as np
 fig, ax = plt.subplots(1, 3, figsize=(14, 5))
 hourly_ticks = 4 * 60 * 60 * np.arange(6)
@@ -215,32 +137,32 @@ for i in range(3):
     ax[i].set_ylabel('average hourly trips')
 ```
 
-![average-trend](img/average-trend.png)
-
 ## Seattle's Work Habits
 
-```{python eval=F}
+```{python}
 dayofweek = pd.to_datetime(X.index).dayofweek
 plt.scatter(Xpca[:, 0], Xpca[:, 1], c=dayofweek, cmap=plt.cm.get_cmap('jet', 7))
 cb = plt.colorbar(ticks=range(7))
 cb.set_ticklabels(['Mon', 'Tues', 'Wed', 'Thurs', 'Fri', 'Sat', 'Sun'])
-plt.clim(-0.5, 6.5)
+plt.clim(-0.5, 6.5); plt.show()
 ```
-
-![work-habits](img/work-habits.png)
 
 # {data-background="img/R-logo.png"}
 
+```{r, include=FALSE}
+Sys.setlocale(locale='en_US.UTF-8')
+```
+
 ## Data Reading
 
-```{r warning=F, message=F}
+```{r}
 bikes <- read.csv("FremontBridge-14-02-2016.csv")
 head(bikes)
 ```
 
 ## Data Cleaning
 
-```{r warning=F, message=F}
+```{r}
 bikes$Date <- as.POSIXct(bikes$Date, format="%m/%d/%Y %r")
 names(bikes) <- c("Date", "West", "East")
 bikes[is.na(bikes)] <- 0
@@ -250,7 +172,7 @@ head(bikes)
 
 ## First Glance (1)
 
-```{r warning=F, message=F}
+```{r, warning=FALSE, message=FALSE}
 library(dplyr); library(tidyr)
 weekly <- bikes %>% 
   gather(zone, count, -Date) %>%
@@ -262,7 +184,7 @@ head(weekly)
 
 ## First Glance (2)
 
-```{r warning=F, message=F}
+```{r}
 library(ggplot2)
 ggplot(weekly) + geom_line(aes(x=Date, y=count, color=zone)) +
   ylab("Weekly trips")
@@ -270,7 +192,7 @@ ggplot(weekly) + geom_line(aes(x=Date, y=count, color=zone)) +
 
 ## Data Transforming
 
-```{r warning=F, message=F}
+```{r}
 bikes$hour <- strftime(bikes$Date, "%H")
 bikes$Date2 <- as.Date(bikes$Date, tz="")
 X <- bikes %>%
@@ -284,7 +206,7 @@ head(X)
 
 ## PCA Analysis (1)
 
-```{r warning=F, message=F}
+```{r}
 pca1 <- prcomp(X[, -1])
 cumvar <- cumsum(pca1$sdev^2 / sum(pca1$sdev^2))
 cumvar[1:5]
@@ -295,16 +217,16 @@ Xpca$Date2 <- X$Date2
 
 ## PCA Analysis (2)
 
-```{r warning=F, message=F}
+```{r}
 Xpca$total_trips <- rowSums(X[, -1])
 ggplot(Xpca) + 
-  geom_point(aes(x=PC1, y=PC2, color=total_trips), alpha=0.7) +
-  scale_colour_distiller(type="qual", palette=6, direction=1)
+  geom_point(aes(x=PC1, y=PC2, color=total_trips)) +
+  scale_colour_viridis_c()
 ```
 
 ## Clustering
 
-```{r warning=F, message=F}
+```{r, message=FALSE, warning=FALSE}
 library(mclust)
 Xpca$clusters <- Mclust(Xpca[, c("PC1", "PC2", "PC3")], G=3, 
                         prior=priorControl())$classification
@@ -314,11 +236,11 @@ ggplot(Xpca) +
 
 ## Average Trend (1)
 
-```{r warning=F, message=F}
+```{r}
 by_hour <- bikes %>%
   left_join(Xpca[, c("clusters", "Date2")], by="Date2") %>% 
   group_by(hour, clusters) %>%
-  summarise_each(funs(mean), -Date, -Date2) %>% 
+  summarise_at(vars(West, East, Total), mean) %>% 
   gather(zone, count, -hour, -clusters)
 by_hour$hour <- as.numeric(by_hour$hour)
 head(by_hour)
@@ -326,21 +248,21 @@ head(by_hour)
 
 ## Average Trend (2)
 
-```{r warning=F, message=F}
+```{r}
 ggplot(by_hour) +
   geom_line(aes(x=hour, y=count, group=zone, color=zone)) +
   facet_wrap(~ clusters) +
-  xlab("Hour") + ylab("Average trips per hour\n")
+  xlab("Hour") + ylab("Average trips per hour")
 ```
 
 ## Seattle's Work Habits
 
-```{r warning=F, message=F}
+```{r}
 Xpca$weekday <- Xpca$Date2 %>% weekdays(abbreviate=T) %>%
   factor(levels=c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
 ggplot(Xpca) + 
-  geom_point(aes(x=PC1, y=PC2, color=weekday), alpha=0.7) +
-  scale_color_brewer(palette="Paired")
+  geom_point(aes(x=PC1, y=PC2, color=weekday)) +
+  scale_color_brewer(palette="Spectral", direction=-1)
 ```
 
 # Side Notes
